@@ -1,0 +1,137 @@
+getAffected <- function(coef,fit,org.db,FC=2,p.val=0.01,centralID="ENTREZID",primeKey="ENSEMBL" ){
+    library(org.db,char=TRUE)
+    org.db.obj <- get(org.db)
+    
+    edgeRLRT <- glmLRT(fit, coef=coef)
+    
+    df <- cbind(edgeRLRT$table[,c('logFC','PValue')],adj.p=p.adjust(edgeRLRT$table$PValue,method="BH"))
+    
+    isAff <- df$adj.p < p.val & abs(df$logFC)>=log2(FC)
+    
+    
+    selectedIDs <- unique(select(org.db.obj,rownames(df)[isAff],centralID,primeKey)[centralID])
+    universeIDs <- unique(select(org.db.obj,rownames(df),centralID,primeKey)[centralID])
+    
+    list(selectedIDs=as.character(selectedIDs[!is.na(selectedIDs)]),
+         universeIDs=as.character(universeIDs[!is.na(universeIDs)]))
+
+}
+
+doGo <- function(id,
+                 genes,
+                 org.db,
+                 ontologies,
+                 p.val
+                 ){
+    
+    selectedIDs <- genes[[id]]$selectedIDs
+    universeIDs <- genes[[id]]$universeIDs
+    ont.id <- ontologies[[id]]
+                         
+    goParams <- new("GOHyperGParams",
+                    geneIds = selectedIDs,
+                    universeGeneIds = universeIDs, 
+                    annotation = org.db,
+                    ontology = ont.id,
+                    pvalueCutoff = p.val,
+                    conditional = TRUE, 
+                    testDirection = 'over')
+    
+    goResults <- hyperGTest(goParams)
+    return(goResults)
+}
+
+
+worker.init <- function(packages) {
+    sapply(packages,library,character.only=TRUE)
+    NULL
+}
+
+
+publishGO <- function(exp,GO.res,selectedIDs,org.db,reportsRoot="./reports/GOanalyis",categorySize=10){
+    title <- paste("GO analysis for",exp)
+    goReport <- HTMLReport(shortName = paste0(exp,'_go_analysis'),
+                           title = title,
+                           reportDirectory = reportsRoot,
+                           handlers = makeHTMLSimr)
+    publish(hwrite(paste('The thresholds used to consider a GO term sigificantly enrich is an adjusted p value',
+                         'lower than',p.val,"for genes with at least a",FC,"fold change with p value lower than",
+                         p.val)),goReport)
+    sapply(names(GO.res),function(ont.id){
+        publish(hwrite(paste(GO.classes[[ont.id]],"GO analysis"), heading=2),goReport)
+        if(sum(summary(GO.res[[ont.id]])$Size > categorySize) > 0){
+            publish(GO.res[[ont.id]],
+                    goReport,
+                    selectedIDs = selectedIDs,
+                    annotation.db = org.db,
+                    categorySize
+                    )
+            finish(goReport)
+            return(goReport)
+        } else {
+            publish(hwrite('No category were over-represented'),goReport)
+        }
+        return(NULL)
+    })
+    finish(goReport)
+    return(goReport)
+}
+
+publishFit2GO <- function(fit,
+                      org.db='org.Dm.eg.db',
+                      primeKey='ENSEMBL',
+                      centralID='ENTREZID',
+                      p.val = 0.01,
+                      FC =  2,
+                      reportsRoot ='./reports',
+                      categorySize = 10,
+                      nCores=ifelse(!is.na(detectCores()),as.integer(detectCores()/3),2L)
+                      ){
+
+    ## Define the ontologies to be analyze
+    GO.classes <- c(BP="Biological Processes",CC="Cell Compartments",MF="Molecular Functions")
+    
+    ## Get the IDs of the affected/univere genes
+    genes <- lapply(2:ncol(fit$design),
+                    getAffected,
+                    fit=fit,
+                    org.db=org.db,
+                    FC=FC,
+                    p.val=p.val,
+                    primeKey=primeKey,
+                    centralID=centralID)
+    names(genes) <- colnames(fit$design)[-1]
+    
+    ## Prep the vectors to pass on to the map functions
+    genes2GO <- rep(genes,each=length(GO.classes))
+    grps <- rep(colnames(fit$design)[-1],each=length(GO.classes))
+    GOes <- rep(names(GO.classes),ncol(fit$design)-1)
+    
+    ## Running GOstats in parallel. mclapply keep giving me random error on the SQLite db access
+    ## Turning to our old friends snow!
+    nCores <- ifelse(nCores < length(GOes),length(GOes),nCores)
+
+    cl <- makeCluster(nCores, type="SOCK")
+    clusterCall(cl, worker.init, c("GOstats"))
+    ## map the GO analysis 
+    GO.results.raw <- parLapply(cl,seq_along(genes2GO),
+                                doGo,
+                                genes=genes2GO,
+                                org.db=org.db,
+                                ontologies=GOes,
+                                p.val=p.val)
+    stopCluster(cl)
+    ## Reduce the results to the original fit data
+    GO.results <- lapply(split(GO.results.raw,grps),function(x) {names(x) <- names(GO.classes);x})
+    
+    ##################################################
+    ### publish
+    ##################################################
+    goReport <- mclapply(names(GO.results),function(exp){
+        publishGO(exp,
+                  GO.results[[exp]],
+                  selectedIDs=genes[[exp]]$selectedIDs,
+                  org.db=org.db)
+    },mc.preschedule=FALSE,mc.cores=nCores)
+
+}
