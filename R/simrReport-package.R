@@ -170,8 +170,11 @@ writeIGVsession <- function(fit,coef,expDesign,IGVgenome,bwDir="./bigwig",report
     
     treat <- colnames(fit$design)[coef]
     
-    cntl <- as.character(expDesign$file.name[rowSums(fit$design) == 1])
-    exp <- as.character(expDesign$file.name[expDesign$grp %in% treat])
+    cntl.bam <- expDesign$files[match(rownames(fit$design)[rowSums(fit$design) == 1],rownames(expDesign))]
+    exp.bam <- expDesign$files[match(rownames(fit$design)[fit$design[,treat]==1],rownames(expDesign))]
+
+    cntl <- sub("\\.bam$","",basename(cntl.bam))
+    exp <- sub("\\.bam$","",basename(exp.bam))
 
     ## Recover the bigwig files
     bigwigs <- list.files(bwDir,"\\.bw$",full.names=TRUE)
@@ -278,8 +281,10 @@ addCPMPlots <- function(edgeRdata,fit,coef=2,reportsRoot="./reports",
     dir.create(file.path(reportsRoot,"images",colnames(fit$design)[coef]),FALSE,TRUE)
 
     genes <- edgeRdata[,ifelse('ensembl_gene_id' %in% colnames(edgeRdata),'ensembl_gene_id','ID')]
-    
-    ##if(!is.null(dev.list())) sapply(dev.list(),dev.off)
+
+    ## Lattice seems to have issues with open printing drivers...
+    if(!is.null(dev.list())) sapply(dev.list(),dev.off)
+
     images <- as.data.frame(do.call(rbind,mclapply(genes,function(gene){
         treat <- factor(rep(colnames(fit$design)[c(1,coef)],sapply(list(control,treatments),length)))
         treat <- relevel(treat,colnames(fit$design)[1])
