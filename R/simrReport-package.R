@@ -137,7 +137,7 @@ addExternalLink <- function(object,linkOut=NULL,...){
 addIGVLink <- function(object,gnModel,...){
     if(class(gnModel) == 'GRangesList'){
         gene.ids <- names(gnModel)
-        gnModel <- unlist(gnModel)
+        gnModel <- unlist(range(gnModel))
         names(gnModel) <- gene.ids
     }
     ids <- ifelse('ensembl_gene_id' %in% colnames(object),'ensembl_gene_id','ID')
@@ -166,12 +166,23 @@ cleanUpDf <- function(object, ...){
     return(object)
 }
 
-writeIGVsession <- function(fit,coef,expDesign,IGVgenome,bwDir="./bigwig",reportsRoot="./reports",extraTracks=NULL) {
+writeIGVsession <- function(fit,
+                            #coef,
+                            cntl,
+                            treat,
+                            bamFiles,
+                            IGVgenome,
+                            bwDir="./bigwig",
+                            reportsRoot="./reports",
+                            extraTracks=NULL) {
     
-    treat <- colnames(fit$design)[coef]
+    ##treat <- colnames(fit$design)[coef]
+    ##cntl.bam <- expDesign$files[match(rownames(fit$design)[rowSums(fit$design) == 1],rownames(expDesign))]
+    ##exp.bam <- expDesign$files[match(rownames(fit$design)[fit$design[,treat]==1],rownames(expDesign))]
+
+    cntl.bam <- bamFiles$files[bamFiles$treatment %in% cntl]
+    exp.bam <- bamFiles$files[bamFiles$treatment %in% treat]
     
-    cntl.bam <- expDesign$files[match(rownames(fit$design)[rowSums(fit$design) == 1],rownames(expDesign))]
-    exp.bam <- expDesign$files[match(rownames(fit$design)[fit$design[,treat]==1],rownames(expDesign))]
 
     cntl <- sub("\\.bam$","",basename(cntl.bam))
     exp <- sub("\\.bam$","",basename(exp.bam))
@@ -182,9 +193,11 @@ writeIGVsession <- function(fit,coef,expDesign,IGVgenome,bwDir="./bigwig",report
                                                             bw[order(bw,decreasing=TRUE)]
                                                         }))
     
-    extraTrk.path = ifelse(!(is.null(extraTracks)|is.na(extraTracks)),
-        paste(list.files(extraTracks,pattern='\\.bed$',full=TRUE),collapse=" "),
-        "")
+    if (!(is.null(extraTracks)|is.na(extraTracks))){
+        extraTrk.path <- paste(list.files(extraTracks,pattern='\\.bed$',full=TRUE),collapse=" ",)
+    } else {
+        extraTrk.path <- ""
+    }
     
     IGV.session <- paste("igv_session",
                          "--relative",reportsRoot,
@@ -199,8 +212,11 @@ writeIGVsession <- function(fit,coef,expDesign,IGVgenome,bwDir="./bigwig",report
 
 ### This is one heck of an ugly hack...
 makeIGVSessionLink <- function(fit,
-                               coef,
-                               expDesign,
+                               #coef,
+                               cntl,
+                               treat,
+                               bamFiles,
+                               #expDesign,
                                IGVgenome,
                                bwDir="./bigwig",
                                reportsRoot="./reportsDir",
@@ -213,11 +229,12 @@ makeIGVSessionLink <- function(fit,
     if(!(is.null(extraTracks) | is.na(extraTracks)))
         extraTracks <- normalizePath(extraTracks)
     
-    treat <- colnames(fit$design)[coef]
-
     IGV.session.file <- writeIGVsession(fit=fit,
-                                        coef=coef,
-                                        expDesign=expDesign,
+                                        #coef=coef,
+                                        cntl=cntl,
+                                        treat=treat,
+                                        bamFiles=bamFiles,
+                                        #expDesign=expDesign,
                                         IGVgenome=IGVgenome,
                                         bwDir=bwDir,
                                         extraTracks=extraTracks,
@@ -249,8 +266,13 @@ gene2name <- function(biomart,martDataset,...){
     gene2name
 }
 
-getEdgeRdata <- function(fit,gene2name=NULL,coef=2,FC=2,p.val=0.01){
-    edgeRLRT <- glmLRT(fit,coef=coef)
+getEdgeRdata <- function(fit,gene2name=NULL,coef=2,conts=NULL,FC=2,p.val=0.01){
+    if (!is.null(coef)){
+        edgeRLRT <- glmLRT(fit,coef=coef)
+    } else {
+        edgeRLRT <- glmLRT(fit,contrast=conts)
+    }
+    
     df <- cbind(edgeRLRT$table[,c('logFC','PValue')],adj.p=p.adjust(edgeRLRT$table$PValue,method="BH"))
     if(!is.null(gene2name)){
         df <- cbind(gene2name[match(rownames(df),gene2name$ensembl_gene),],df)
@@ -268,17 +290,25 @@ writeCSVfile <- function(treat,df,reportsRoot="./reports"){
     return(csv.file)
 }
 
-addCPMPlots <- function(edgeRdata,fit,coef=2,reportsRoot="./reports",
+addCPMPlots <- function(edgeRdata,
+                        fit,
+                        cntl,
+                        treat,
+                        reportsRoot="./reports",
                         nCores=ifelse(!is.na(detectCores()),detectCores()/2,2L)){
     
     if(sum(edgeRdata$isAff)==0){return(NULL)}
     edgeRdata <- data.frame(edgeRdata[edgeRdata$isAff,])
     
-    control <- which(rowSums(fit$design)==1)
-    treatments <- which(fit$design[,coef]==1)
-    countData <- cpm(fit$counts[,c(control,treatments)])
+    controls <- which(rowSums(fit$design)==1 & fit$design[,cntl] == 1)
+    treatments <- which(fit$design[,treat] == 1)
 
-    dir.create(file.path(reportsRoot,"images",colnames(fit$design)[coef]),FALSE,TRUE)
+    #treatments <- which(fit$design[,coef]==1)
+    
+    countData <- cpm(fit$counts[,c(controls,treatments)])
+
+    #dir.create(file.path(reportsRoot,"images",colnames(fit$design)[coef]),FALSE,TRUE)
+    dir.create(file.path(reportsRoot,"images",treat),FALSE,TRUE)
 
     genes <- edgeRdata[,ifelse('ensembl_gene_id' %in% colnames(edgeRdata),'ensembl_gene_id','ID')]
 
@@ -286,9 +316,12 @@ addCPMPlots <- function(edgeRdata,fit,coef=2,reportsRoot="./reports",
     if(!is.null(dev.list())) sapply(dev.list(),dev.off)
 
     images <- as.data.frame(do.call(rbind,mclapply(genes,function(gene){
-        treat <- factor(rep(colnames(fit$design)[c(1,coef)],sapply(list(control,treatments),length)))
-        treat <- relevel(treat,colnames(fit$design)[1])
-        data <- data.frame(treat=treat,cpm=countData[gene,])
+
+        treats <- factor(rep(c(cntl,treat),sapply(list(controls,treatments),length)))
+        treats <- relevel(treats,cntl)
+        
+        data <- data.frame(treat=treats,cpm=countData[gene,])
+        
         gene.name <- ifelse('ensembl_gene_id' %in% colnames(edgeRdata),
                             edgeRdata[edgeRdata$ensembl_gene_id == gene,'external_gene_id'],
                             gene)
@@ -299,7 +332,8 @@ addCPMPlots <- function(edgeRdata,fit,coef=2,reportsRoot="./reports",
                        pch=20,
                        cex=1.25,
                        bg='blue')
-        base <- file.path("images",colnames(fit$design)[coef],paste0(gene,"_stripplot"))
+
+        base <- file.path("images",treat,paste0(gene,"_stripplot"))
         png <- paste0(base,".png")
         pdf <- paste0(base,".pdf")
         png(file.path(reportsRoot,png),150,150)
@@ -320,6 +354,7 @@ addCPMPlots <- function(edgeRdata,fit,coef=2,reportsRoot="./reports",
 
 publishFit <- function(fit,
                        expDesign,
+                       bamFiles,
                        gnModel,
                        htmlRep,
                        biomart='ensembl',
@@ -333,6 +368,7 @@ publishFit <- function(fit,
                        serverRoot="",
                        extraTracks=NULL,
                        nCores=4L){
+
     ## Opening remarks
     publish(hwrite(paste("A gene is considered significantly change",
                              "if it as a p value lower then",
@@ -345,70 +381,136 @@ publishFit <- function(fit,
     } else {
         gene2name <- NULL
     }
-    
-    ## Rolling over the different contrast coeficient
-    sapply(2:ncol(fit$design),function(coef){
-        ## Get the DGE for the coeficient under scrutiny
-        treat <- colnames(fit$design)[coef]
-        
-        edgeRdata <- getEdgeRdata(fit,
-                                  coef,
-                                  gene2name=gene2name,
-                                  FC=FC,
-                                  p.val=p.val
-                                  )
-        
-        csv.file <- writeCSVfile(treat,edgeRdata,reportsRoot)
-        
-        edgeRdata <- addCPMPlots(edgeRdata,
-                                 fit,
-                                 coef,
-                                 reportsRoot=reportsRoot,
-                                 nCores=nCores
-                                 )
-        
-        IGVlink <- makeIGVSessionLink(fit=fit,
-                                      coef=coef,
-                                      expDesign=expDesign,
-                                      bwDir=bwDir,
-                                      IGVgenome=IGVgenome,
-                                      extraTracks=extraTracks,
-                                      reportsRoot=reportsRoot,
-                                      serverRoot=serverRoot
+
+    ## Ok... What kind of desing matrix do we have... One column is the itercept?
+    if (all(fit$design[,1] == 1)){
+        ## If so, just run over the coef to publish
+        sapply(2:ncol(fit$design),function(coef){
+            ## Get the DGE for the coeficient under scrutiny
+            treat <- colnames(fit$design)[coef]
+            cntl <-  colnames(fit$design)[1]
+            edgeRdata <- getEdgeRdata(fit,
+                                      coef,
+                                      gene2name=gene2name,
+                                      FC=FC,
+                                      p.val=p.val
                                       )
+            ## Finally, publish the edgeR data
+            publishEdgeRdata(htmlRep,
+                             edgeRdata,
+                             cntl,
+                             treat,
+                             reportsRoot,
+                             bamFiles,
+                             bwDir,
+                             IGVgenome,
+                             extraTracks,
+                             serverRoot,
+                             linkOut,
+                             gnModel,
+                             nCores)
+        })
+    }
+    ## Otherwise, use alternative methods
+    else if (class(expDesign) == 'list' & all(names(expDesign) %in% c('cntls','exps'))){
+        mapply(function(c,e){
+            treat <- e
+            cntl <- c
+            conts <- ifelse(colnames(fit$design) %in% c,-1,ifelse(colnames(fit$design) %in% e,1,0))
+            edgeRdata <- getEdgeRdata(fit,
+                                      coef=NULL,
+                                      conts=conts,
+                                      gene2name=gene2name,
+                                      FC=FC,
+                                      p.val=p.val
+                                      )
+            ## Finally, publish the edgeR data
+            publishEdgeRdata(htmlRep,
+                             edgeRdata,
+                             cntl,
+                             treat,
+                             reportsRoot,
+                             bamFiles,
+                             bwDir,
+                             IGVgenome,
+                             extraTracks,
+                             serverRoot,
+                             linkOut,
+                             gnModel,
+                             nCores)
+            
+        },expDesign$cntls,expDesign$exps)
+    }
+    else {
+        message("Don't know how to proceed")
+    }
+}
 
-   ################################################## 
-   ### Publish to ReportingTools the different object created
-   ##################################################
-        publish(hwrite(paste('Number of differentially regulated genes in',treat), heading=3),htmlRep)
-
-        if(!is.null(edgeRdata)){
-            publish(data.frame("Up regulated"  =sum(edgeRdata$logFC>0 & edgeRdata$isAff),
-                               "Down Regulated"=sum(edgeRdata$logFC<0 & edgeRdata$isAff)),htmlRep)
-        }else{
-            publish(data.frame("Up regulated"  =0,
-                               "Down Regulated"=0),htmlRep)
-        }
-
-        publish(hwrite(paste('List of differentially regulated genes in',treat), heading=3),htmlRep)
-        
-        IGVhtml <- hwrite(paste("Click here to open an IGV session with the",
+publishEdgeRdata <- function(htmlRep,
+                             edgeRdata,
+                             cntl,
+                             treat,
+                             reportsRoot,
+                             bamFiles,
+                             bwDir,
+                             IGVgenome,
+                             extraTracks,
+                             serverRoot,
+                             linkOut,
+                             gnModel,
+                             nCores){
+    
+    csv.file <- writeCSVfile(treat,edgeRdata,reportsRoot)
+    
+    edgeRdata <- addCPMPlots(edgeRdata,
+                             fit,
+                             cntl,
+                             treat,
+                             reportsRoot=reportsRoot,
+                             nCores=nCores
+                             )
+    
+    IGVlink <- makeIGVSessionLink(fit=fit,
+                                  cntl=cntl,
+                                  treat=treat,
+                                  bamFiles=bamFiles,
+                                  bwDir=bwDir,
+                                  IGVgenome=IGVgenome,
+                                  extraTracks=extraTracks,
+                                  reportsRoot=reportsRoot,
+                                  serverRoot=serverRoot
+                                  )
+    
+################################################## 
+### Publish to ReportingTools the different object created
+##################################################
+    publish(hwrite(paste('Number of differentially regulated genes in',treat), heading=3),htmlRep)
+    
+    if(!is.null(edgeRdata)){
+        publish(data.frame("Up regulated"  =sum(edgeRdata$logFC>0 & edgeRdata$isAff),
+                           "Down Regulated"=sum(edgeRdata$logFC<0 & edgeRdata$isAff)),htmlRep)
+    }else{
+        publish(data.frame("Up regulated"  =0,
+                           "Down Regulated"=0),htmlRep)
+    }
+    
+    publish(hwrite(paste('List of differentially regulated genes in',treat), heading=3),htmlRep)
+    
+    IGVhtml <- hwrite(paste("Click here to open an IGV session with the",
                                 colnames(fit$design)[1],"and",paste(treat,collapse=" "),
-                                "relative coverages (relative to aligned reads)"),link=IGVlink)
-        
-        publish(IGVhtml,heading=3,htmlRep)
-        
-        if(!is.null(edgeRdata)){
-            publish(edgeRdata, htmlRep,
-                    gnModel=gnModel,
-                    linkOut=linkOut,
-                    .modifyDF = list(addExternalLink,addIGVLink,cleanUpDf))
-        } else {
-            publish(hwrite("No genes are differentially regulated",heading=3),htmlRep)
-        }
-        publish(Link(paste("Click here to download the all of the DGE results for",treat),csv.file),htmlRep)
-
-        return(NULL)
-  })
-
+                            "relative coverages (relative to aligned reads)"),link=IGVlink)
+    
+    publish(IGVhtml,heading=3,htmlRep)
+    
+    if(!is.null(edgeRdata)){
+        publish(edgeRdata, htmlRep,
+                gnModel=gnModel,
+                linkOut=linkOut,
+                .modifyDF = list(addExternalLink,addIGVLink,cleanUpDf))
+    } else {
+        publish(hwrite("No genes are differentially regulated",heading=3),htmlRep)
+    }
+    publish(Link(paste("Click here to download the all of the DGE results for",treat),csv.file),htmlRep)
+    
+    return(NULL)
 }
