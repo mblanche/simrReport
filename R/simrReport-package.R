@@ -46,17 +46,9 @@ maPlot.simr <- function(fit,coef,p.value=0.05,log2FC=log2(2),reportDir="./report
     return(c(pdf=pdf.f,png=png.f))
 }
 
-plotClustering <- function(SE,method=c('spearman','kendall','pearson','euclidian')){
+plotClustering <- function(counts,method=c('spearman','kendall','pearson','euclidian')){
     method <- match.arg(method)
-    ## Given a SummarizedExperiment object,
-    ## use edgeR to compute a normalized RPKM value
-    ## for genes with at least 2 sample with cpm > 5
-    dge <- DGEList(assay(SE), group=SE$treatment)
-    dge <- calcNormFactors(dge)
-    cpm.d <- cpm(dge)
-    dge <- dge[ rowSums(cpm.d > 5) >=2, ]
-    ## Use the log10 rpkm value
-    d <- log10(rpkm(dge, sum(width(SE[rowSums(cpm.d > 5) >=2,]))))
+    d <- counts
     ## Clustering the data
     if(method == 'euclidian'){
         dd <- d
@@ -79,6 +71,7 @@ plotClustering <- function(SE,method=c('spearman','kendall','pearson','euclidian
            ,heights=c(15,80,10))
     ## Draw the sample dendrogram
     op <- par(mar = c(0,2,4,2))
+
     plot(as.dendrogram(x.cluster),
          axes=TRUE,
          yaxt='s',
@@ -114,7 +107,7 @@ plotClustering <- function(SE,method=c('spearman','kendall','pearson','euclidian
     par(op)
     return(d[order(rowMeans(d)),x.cluster$order])
 }
-   
+
 ##################################################
 ### Some helper function for publishing tables
 ##################################################
