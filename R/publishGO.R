@@ -1,4 +1,5 @@
 getAffected <- function(coef,fit,org.db,FC=2,p.val=0.01,centralID="ENTREZID",primeKey="ENSEMBL" ){
+    ## Loading the org.db in the Search space
     library(org.db,char=TRUE)
     org.db.obj <- get(org.db)
     
@@ -8,9 +9,11 @@ getAffected <- function(coef,fit,org.db,FC=2,p.val=0.01,centralID="ENTREZID",pri
     
     isAff <- df$adj.p < p.val & abs(df$logFC)>=log2(FC)
     
-    
-    selectedIDs <- unique(select(org.db.obj,rownames(df)[isAff],centralID,primeKey)[centralID])
-    universeIDs <- unique(select(org.db.obj,rownames(df),centralID,primeKey)[centralID])
+    ## Stop the warnings about 1 to many relationship... we know that tha!
+    suppressWarnings({
+        selectedIDs <- unique(select(org.db.obj,rownames(df)[isAff],centralID,primeKey)[centralID])
+        universeIDs <- unique(select(org.db.obj,rownames(df),centralID,primeKey)[centralID])
+    })
     
     list(selectedIDs=as.character(selectedIDs[!is.na(selectedIDs)]),
          universeIDs=as.character(universeIDs[!is.na(universeIDs)]))
@@ -47,48 +50,18 @@ worker.init <- function(packages) {
     NULL
 }
 
-
-publishGO <- function(exp,GO.res,selectedIDs,org.db,reportsRoot="./reports/GOanalyis",categorySize=10){
-    title <- paste("GO analysis for",exp)
-    goReport <- HTMLReport(shortName = paste0(exp,'_go_analysis'),
-                           title = title,
-                           reportDirectory = reportsRoot,
-                           handlers = makeHTMLSimr)
-    publish(hwrite(paste('The thresholds used to consider a GO term sigificantly enrich is an adjusted p value',
-                         'lower than',p.val,"for genes with at least a",FC,"fold change with p value lower than",
-                         p.val)),goReport)
-    sapply(names(GO.res),function(ont.id){
-        publish(hwrite(paste(GO.classes[[ont.id]],"GO analysis"), heading=2),goReport)
-        if(sum(summary(GO.res[[ont.id]])$Size > categorySize) > 0){
-            publish(GO.res[[ont.id]],
-                    goReport,
-                    selectedIDs = selectedIDs,
-                    annotation.db = org.db,
-                    categorySize
-                    )
-            finish(goReport)
-            return(goReport)
-        } else {
-            publish(hwrite('No category were over-represented'),goReport)
-        }
-        return(NULL)
-    })
-    finish(goReport)
-    return(goReport)
-}
-
 publishFit2GO <- function(fit,
-                      org.db='org.Dm.eg.db',
-                      primeKey='ENSEMBL',
-                      centralID='ENTREZID',
-                      p.val = 0.01,
-                      FC =  2,
-                      reportsRoot ='./reports',
-                      categorySize = 10,
-                      nCores=ifelse(!is.na(detectCores()),as.integer(detectCores()/3),2L)
-                      ){
-
-    ## Define the ontologies to be analyze
+                          org.db='org.Dm.eg.db',
+                          primeKey='ENSEMBL',
+                          centralID='ENTREZID',
+                          p.val = 0.01,
+                          FC =  2,
+                          reportsRoot ='./reports',
+                          categorySize = 10,
+                          nCores=ifelse(!is.na(detectCores()),as.integer(detectCores()/3),2L)
+                          ){
+    
+    ## Define the ontologies to be analyzed
     GO.classes <- c(BP="Biological Processes",CC="Cell Compartments",MF="Molecular Functions")
     
     ## Get the IDs of the affected/univere genes
@@ -106,11 +79,10 @@ publishFit2GO <- function(fit,
     genes2GO <- rep(genes,each=length(GO.classes))
     grps <- rep(colnames(fit$design)[-1],each=length(GO.classes))
     GOes <- rep(names(GO.classes),ncol(fit$design)-1)
-    
+
     ## Running GOstats in parallel. mclapply keep giving me random error on the SQLite db access
     ## Turning to our old friends snow!
-    nCores <- ifelse(nCores < length(GOes),length(GOes),nCores)
-
+    nCores <- ifelse(nCores > length(GOes),length(GOes),nCores)
     cl <- makeCluster(nCores, type="SOCK")
     clusterCall(cl, worker.init, c("GOstats"))
     ## map the GO analysis 
@@ -127,11 +99,41 @@ publishFit2GO <- function(fit,
     ##################################################
     ### publish
     ##################################################
-    goReport <- mclapply(names(GO.results),function(exp){
-        publishGO(exp,
-                  GO.results[[exp]],
-                  selectedIDs=genes[[exp]]$selectedIDs,
-                  org.db=org.db)
-    },mc.preschedule=FALSE,mc.cores=nCores)
-
+    ##goReport <- mclapply(names(GO.results),function(exp){
+    goReports <- lapply(names(GO.results),function(exp){
+        GO.res <- GO.results[[exp]]
+        title <- paste("GO analysis for",exp)
+        goReport <- HTMLReport(shortName = paste0(exp,'_go_analysis'),
+                               title = title,
+                               reportDirectory = reportsRoot,
+                               handlers = makeHTMLSimr)
+        publish(hwrite(paste('The thresholds used to consider a GO term sigificantly enrich',
+                             'is an adjusted p value lower than',
+                             p.val,
+                             "for genes with at least a",
+                             FC,
+                             "fold change with p value lower than",
+                             p.val)
+                       ),goReport)
+        sapply(names(GO.classes),function(ont.id){
+            publish(hwrite(paste(GO.classes[[ont.id]],"GO analysis"), heading=2),goReport)
+            if(sum(summary(GO.res[[ont.id]])$Size > categorySize) > 0){
+                publish(GO.res[[ont.id]],
+                        goReport,
+                        selectedIDs = genes[[exp]]$selectedIDs,
+                        annotation.db = org.db,
+                        categorySize
+                        )
+            } else {
+                publish(hwrite('No category were over-represented'),goReport)
+            }
+        })
+        finish(goReport)
+        return(goReport)
+    })
+    ##},mc.preschedule=FALSE,mc.cores=nCores)
+    return(goReports)
 }
+
+
+    

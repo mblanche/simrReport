@@ -268,6 +268,8 @@ getEdgeRdata <- function(fit,gene2name=NULL,coef=2,conts=NULL,FC=2,p.val=0.01){
     
     df <- cbind(edgeRLRT$table[,c('logFC','PValue')],adj.p=p.adjust(edgeRLRT$table$PValue,method="BH"))
     if(!is.null(gene2name)){
+        ## Ok... Got to deal with ensembl deprecated ids... otherwise we die!
+        df <- df[rownames(df) %in% gene2name$ensembl_gene_id,]
         df <- cbind(gene2name[match(rownames(df),gene2name$ensembl_gene),],df)
     } else {
         df$ID <- rownames(fit$counts)
@@ -296,25 +298,18 @@ addCPMPlots <- function(edgeRdata,
     controls <- which(rowSums(fit$design)==1 & fit$design[,cntl] == 1)
     treatments <- which(fit$design[,treat] == 1)
 
-    #treatments <- which(fit$design[,coef]==1)
-    
     countData <- cpm(fit$counts[,c(controls,treatments)])
 
-    #dir.create(file.path(reportsRoot,"images",colnames(fit$design)[coef]),FALSE,TRUE)
     dir.create(file.path(reportsRoot,"images",treat),FALSE,TRUE)
-
     genes <- edgeRdata[,ifelse('ensembl_gene_id' %in% colnames(edgeRdata),'ensembl_gene_id','ID')]
 
     ## Lattice seems to have issues with open printing drivers...
     if(!is.null(dev.list())) sapply(dev.list(),dev.off)
 
     images <- as.data.frame(do.call(rbind,mclapply(genes,function(gene){
-
         treats <- factor(rep(c(cntl,treat),sapply(list(controls,treatments),length)))
         treats <- relevel(treats,cntl)
-        
         data <- data.frame(treat=treats,cpm=countData[gene,])
-        
         gene.name <- ifelse('ensembl_gene_id' %in% colnames(edgeRdata),
                             edgeRdata[edgeRdata$ensembl_gene_id == gene,'external_gene_id'],
                             gene)
@@ -325,7 +320,6 @@ addCPMPlots <- function(edgeRdata,
                        pch=20,
                        cex=1.25,
                        bg='blue')
-
         base <- file.path("images",treat,paste0(gene,"_stripplot"))
         png <- paste0(base,".png")
         pdf <- paste0(base,".pdf")
@@ -337,7 +331,6 @@ addCPMPlots <- function(edgeRdata,
         dev.off()
         return(c(png=png,pdf=pdf))
     },mc.cores=nCores)))
-    
     edgeRdata$Image <- hwriteImage(images$png,
                                    link=images$pdf, 
                                    table=FALSE,
