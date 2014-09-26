@@ -15,7 +15,8 @@ import(edgeR)
 #importFrom(edgeR,glmLRT,DGEList,calcNormFactors,rpkm)
 
 importFrom(ReportingTools,publish,HTMLReport,finish)
-importFrom(GOstats,summary)
+#importFrom(GOstats,summary)
+import(GOstats)
 importFrom(XML,xmlChildren,xmlRoot,removeChildren,addChildren,replaceNodes,saveXML,htmlParse)
 
 

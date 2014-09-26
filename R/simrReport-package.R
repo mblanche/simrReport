@@ -252,8 +252,6 @@ gene2name <- function(biomart,martDataset,...){
               'description',
               'gene_biotype')
     gene2name <-  getBM(attributes=atts,
-                        filters = '',
-                        values ='',
                         mart=mart)
     gene2name$description <- sub("\\s\\[Source.+","",gene2name$description)
     gene2name
